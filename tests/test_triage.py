@@ -1,10 +1,5 @@
-"""Tests del agente de triage.
-
-Nunca llaman a Gemini: `triage_agent.override(model=...)` sustituye el modelo
-real por uno falso que controlamos.
-- TestModel: llama a todas las tools y genera una salida válida "de relleno".
-- FunctionModel: nosotros escribimos lo que "responde el modelo" en cada paso.
-"""
+"""Triage agent tests: `triage_agent.override(model=...)` swaps in a fake model,
+so no real LLM is ever called."""
 
 import threading
 import time
@@ -27,21 +22,20 @@ from app.services import tickets as ticket_service
 
 @pytest.fixture
 def fake_api_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    # build_model() exige una key; con override el modelo real nunca se usa
+    # build_model() requires a key; the overridden model means it is never used.
     monkeypatch.setattr(settings, "google_api_key", "test-key")
     yield
 
 
 def scripted_model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-    """Simula un modelo que primero consulta el historial y luego responde."""
+    """Fake model: first asks for the customer history, then returns the result."""
     tool_returns = [
         part for message in messages for part in message.parts if isinstance(part, ToolReturnPart)
     ]
     if not tool_returns:
-        # Paso 1: el "modelo" pide ejecutar una tool
         return ModelResponse(parts=[ToolCallPart("get_customer_history", {})])
 
-    # Paso 2: ya tiene el historial → entrega la salida final (tool "final_result")
+    # Structured output is returned through the "final_result" output tool.
     history = tool_returns[0].content
     priority = "high" if history else "medium"
     return ModelResponse(
@@ -51,8 +45,8 @@ def scripted_model(messages: list[ModelMessage], info: AgentInfo) -> ModelRespon
                 {
                     "priority": priority,
                     "category": "billing",
-                    "summary": "Cliente reclama de nuevo un error en su factura.",
-                    "suggested_reply": "Hola, sentimos las molestias. Lo revisamos hoy mismo.",
+                    "summary": "Customer is chasing an invoice error again.",
+                    "suggested_reply": "Hi, sorry for the trouble. We are looking into it.",
                 },
             )
         ]
@@ -64,10 +58,10 @@ def test_triage_saves_agent_result(
 ) -> None:
     email = "marta@example.com"
     ticket_service.create_ticket(
-        session, TicketCreate(subject="Factura mal", body="Importe incorrecto", customer_email=email)
+        session, TicketCreate(subject="Wrong invoice", body="Incorrect amount", customer_email=email)
     )
     current = ticket_service.create_ticket(
-        session, TicketCreate(subject="Sigo esperando", body="Nadie responde", customer_email=email)
+        session, TicketCreate(subject="Still waiting", body="Nobody answered", customer_email=email)
     )
 
     with triage_agent.override(model=FunctionModel(scripted_model)):
@@ -75,12 +69,12 @@ def test_triage_saves_agent_result(
 
     assert response.status_code == 200
     data = response.json()
-    # "high" porque la tool encontró un ticket previo del mismo cliente
+    # "high" because the tool found a previous ticket from the same customer
     assert data["priority"] == "high"
     assert data["category"] == "billing"
-    assert data["summary"].startswith("Cliente reclama")
+    assert data["summary"].startswith("Customer is chasing")
     assert data["suggested_reply"]
-    # Y quedó guardado en la base de datos
+    # ...and it was persisted
     assert client.get(f"/tickets/{current.id}").json()["priority"] == "high"
 
 
@@ -90,20 +84,20 @@ def test_tools_never_run_concurrently(
     fake_api_key: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regresión: dos tools en paralelo compartían la sesión de BD y PostgreSQL fallaba."""
+    """Regression: parallel tools shared one DB session and broke the PostgreSQL transaction."""
     created = client.post("/tickets", json=ticket_payload).json()
 
     active = 0
     max_active = 0
     lock = threading.Lock()
 
-    def track(original):  # envuelve una función del service para medir solapamientos
+    def track(original):  # wraps a service function to measure overlapping calls
         def wrapper(*args, **kwargs):
             nonlocal active, max_active
             with lock:
                 active += 1
                 max_active = max(max_active, active)
-            time.sleep(0.05)  # da tiempo a que otra tool se solape si fuera posible
+            time.sleep(0.05)  # gives another tool time to overlap, if it could
             try:
                 return original(*args, **kwargs)
             finally:
@@ -117,11 +111,11 @@ def test_tools_never_run_concurrently(
 
     def both_tools_at_once(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         if len(messages) == 1:
-            # Como hizo Gemini de verdad: pide las dos tools en la MISMA respuesta
+            # As Gemini did in production: both tools in the SAME response
             return ModelResponse(
                 parts=[
                     ToolCallPart("get_customer_history", {}),
-                    ToolCallPart("search_similar_tickets", {"keywords": "sesión"}),
+                    ToolCallPart("search_similar_tickets", {"keywords": "log in"}),
                 ]
             )
         return ModelResponse(
@@ -160,13 +154,13 @@ def test_triage_model_error_returns_503(
     created = client.post("/tickets", json=ticket_payload).json()
 
     def broken_model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        raise UnexpectedModelBehavior("el modelo devolvió basura")
+        raise UnexpectedModelBehavior("garbage output")
 
     with triage_agent.override(model=FunctionModel(broken_model)):
         response = client.post(f"/tickets/{created['id']}/triage")
 
     assert response.status_code == 503
-    # El ticket no se modificó
+    # The ticket was left untouched
     assert client.get(f"/tickets/{created['id']}").json()["priority"] is None
 
 
@@ -190,26 +184,25 @@ def test_triage_ticket_not_found(client: TestClient) -> None:
 def test_search_tickets(session: Session) -> None:
     login = ticket_service.create_ticket(
         session,
-        TicketCreate(subject="No puedo iniciar sesión", body="Error 500", customer_email="a@x.com"),
+        TicketCreate(subject="Cannot log in", body="Error 500", customer_email="a@x.com"),
     )
     ticket_service.create_ticket(
         session,
-        TicketCreate(subject="Factura", body="Cobro doble", customer_email="b@x.com"),
+        TicketCreate(subject="Invoice", body="Charged twice", customer_email="b@x.com"),
     )
 
-    # Ojo: SQLite solo ignora mayúsculas en letras ASCII ("Ó" ≠ "ó"); PostgreSQL sí las iguala
-    found = ticket_service.search_tickets(session, "INICIAR sesión")
+    found = ticket_service.search_tickets(session, "LOG IN")
 
     assert [t.id for t in found] == [login.id]
-    assert ticket_service.search_tickets(session, "iniciar", exclude_id=login.id) == []
+    assert ticket_service.search_tickets(session, "log", exclude_id=login.id) == []
 
 
 def test_list_tickets_filter_by_customer(
     client: TestClient, ticket_payload: dict[str, str]
 ) -> None:
     client.post("/tickets", json=ticket_payload)
-    client.post("/tickets", json={**ticket_payload, "customer_email": "otro@example.com"})
+    client.post("/tickets", json={**ticket_payload, "customer_email": "other@example.com"})
 
-    response = client.get("/tickets", params={"customer_email": "otro@example.com"})
+    response = client.get("/tickets", params={"customer_email": "other@example.com"})
 
-    assert [t["customer_email"] for t in response.json()] == ["otro@example.com"]
+    assert [t["customer_email"] for t in response.json()] == ["other@example.com"]

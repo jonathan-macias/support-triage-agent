@@ -1,10 +1,5 @@
-"""Lógica de negocio de los tickets.
-
-Aquí NO hay nada de HTTP (ni códigos 404, ni requests). Son funciones normales
-de Python que reciben una sesión de BD y datos. Esto es importante para las
-siguientes fases: las *tools* del agente de IA y el servidor MCP llamarán a
-estas mismas funciones, sin pasar por la API web.
-"""
+"""Ticket business logic, free of HTTP concerns so the API, the agent tools and
+the MCP server can all share it."""
 
 from sqlmodel import Session, or_, select
 
@@ -15,8 +10,8 @@ from app.schemas import TicketCreate, TicketUpdate
 def create_ticket(session: Session, data: TicketCreate) -> Ticket:
     ticket = Ticket(**data.model_dump())
     session.add(ticket)
-    session.commit()  # guarda en la BD
-    session.refresh(ticket)  # recarga el objeto para obtener el id generado
+    session.commit()
+    session.refresh(ticket)
     return ticket
 
 
@@ -26,7 +21,7 @@ def get_ticket(session: Session, ticket_id: int) -> Ticket | None:
 
 def list_tickets(
     session: Session,
-    *,  # todo lo que va después del * debe pasarse por nombre: list_tickets(s, status=...)
+    *,
     status: TicketStatus | None = None,
     priority: TicketPriority | None = None,
     category: TicketCategory | None = None,
@@ -34,7 +29,6 @@ def list_tickets(
     limit: int = 50,
     offset: int = 0,
 ) -> list[Ticket]:
-    # `select(Ticket)` construye la consulta SQL "SELECT ... FROM ticket"
     query = select(Ticket)
     if status is not None:
         query = query.where(Ticket.status == status)
@@ -52,8 +46,8 @@ def list_tickets(
 def search_tickets(
     session: Session, text: str, *, exclude_id: int | None = None, limit: int = 5
 ) -> list[Ticket]:
-    """Busca tickets cuyo asunto o cuerpo contengan `text` (sin distinguir mayúsculas)."""
-    pattern = f"%{text}%"  # en SQL, % significa "cualquier cosa"
+    """Case-insensitive substring search over subject and body."""
+    pattern = f"%{text}%"
     query = select(Ticket).where(
         or_(Ticket.subject.ilike(pattern), Ticket.body.ilike(pattern))
     )
@@ -65,7 +59,6 @@ def search_tickets(
 
 
 def update_ticket(session: Session, ticket: Ticket, changes: TicketUpdate) -> Ticket:
-    # exclude_unset=True → solo los campos que el cliente envió de verdad
     for field, value in changes.model_dump(exclude_unset=True).items():
         setattr(ticket, field, value)
     ticket.updated_at = utc_now()

@@ -1,20 +1,13 @@
-"""Endpoints HTTP de /tickets.
-
-Un router agrupa rutas relacionadas. Cada función decorada con
-`@router.get/post/...` es un endpoint. Los endpoints son "finos": traducen
-HTTP ↔ Python y delegan el trabajo real en `app.services.tickets`.
-"""
-
 from http import HTTPStatus
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic_ai.exceptions import AgentRunError
 
+from app.agent.triage import MissingApiKeyError
 from app.database import SessionDep
 from app.models import Ticket, TicketCategory, TicketPriority, TicketStatus
 from app.schemas import TicketCreate, TicketRead, TicketUpdate
-from app.agent.triage import MissingApiKeyError
 from app.services import tickets as service
 from app.services.triage import triage_ticket
 
@@ -22,14 +15,9 @@ router = APIRouter(prefix="/tickets", tags=["tickets"])
 
 
 def get_ticket_or_404(ticket_id: int, session: SessionDep) -> Ticket:
-    """Dependencia: busca el ticket de la URL o corta la petición con 404.
-
-    Como `ticket_id` coincide con `{ticket_id}` en la ruta, FastAPI lo toma de
-    la URL y lo convierte a int (si no es un número → 422).
-    """
     ticket = service.get_ticket(session, ticket_id)
     if ticket is None:
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Ticket no encontrado")
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Ticket not found")
     return ticket
 
 
@@ -38,14 +26,12 @@ TicketDep = Annotated[Ticket, Depends(get_ticket_or_404)]
 
 @router.post("", response_model=TicketRead, status_code=HTTPStatus.CREATED)
 def create_ticket(data: TicketCreate, session: SessionDep) -> Ticket:
-    # `data: TicketCreate` → FastAPI lee el JSON del body y lo valida con Pydantic
     return service.create_ticket(session, data)
 
 
 @router.get("", response_model=list[TicketRead])
 def list_tickets(
     session: SessionDep,
-    # Parámetros de query: /tickets?status=open&limit=10
     status: TicketStatus | None = None,
     priority: TicketPriority | None = None,
     category: TicketCategory | None = None,
@@ -79,18 +65,16 @@ def delete_ticket(ticket: TicketDep, session: SessionDep) -> None:
     service.delete_ticket(session, ticket)
 
 
-# `async def`: el agente espera la respuesta del modelo por red (varios segundos).
-# Con `await`, el servidor puede atender otras peticiones mientras tanto.
 @router.post("/{ticket_id}/triage", response_model=TicketRead)
 async def triage(ticket: TicketDep, session: SessionDep) -> Ticket:
-    """Usa el agente de IA para asignar prioridad, categoría, resumen y respuesta sugerida."""
+    """Classify the ticket with the AI agent and store the result."""
     try:
         return await triage_ticket(session, ticket)
     except MissingApiKeyError as exc:
         raise HTTPException(status_code=HTTPStatus.SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except AgentRunError as exc:
-        # Fallo del proveedor de IA (red, cuota, respuesta inválida, límite de uso...)
+        # Provider outage, rate limit, invalid model output or usage limit exceeded.
         raise HTTPException(
             status_code=HTTPStatus.SERVICE_UNAVAILABLE,
-            detail=f"El agente de IA no pudo completar el triage: {exc}",
+            detail=f"The AI agent could not complete the triage: {exc}",
         ) from exc

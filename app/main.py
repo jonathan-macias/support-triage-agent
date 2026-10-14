@@ -1,10 +1,3 @@
-"""Punto de entrada de la API.
-
-Arrancar en modo desarrollo (se recarga al guardar cambios):
-    uv run python -m fastapi dev app/main.py
-Documentación interactiva: http://127.0.0.1:8000/docs
-"""
-
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -17,10 +10,8 @@ from app.routers import tickets
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # Código ANTES del yield: se ejecuta una vez al arrancar el servidor.
     create_db_and_tables()
     yield
-    # Código DESPUÉS del yield: se ejecutaría al apagar (cerrar conexiones, etc.).
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)

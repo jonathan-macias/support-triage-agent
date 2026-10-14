@@ -1,12 +1,4 @@
-"""Fixtures compartidas por todos los tests.
-
-Una *fixture* de pytest es una función que prepara algo que los tests piden
-por nombre: `def test_x(client): ...` recibe lo que devuelve `client()`.
-
-Los tests NO usan PostgreSQL: usan SQLite en memoria (rápido, sin Docker).
-Lo conseguimos con `app.dependency_overrides`, que le dice a FastAPI
-"cuando un endpoint pida get_session, usa esta otra sesión".
-"""
+"""Tests run against in-memory SQLite (no Docker) and never call a real LLM."""
 
 from collections.abc import Iterator
 
@@ -19,15 +11,13 @@ from sqlmodel import Session, SQLModel, create_engine
 from app.database import get_session
 from app.main import app
 
-# Red de seguridad: si algún test intentara llamar a un modelo de IA real
-# (con coste), Pydantic AI lanzaría un error en vez de hacer la petición.
+# Fail loudly instead of sending a real (billable) request to a model provider.
 models.ALLOW_MODEL_REQUESTS = False
 
 
 @pytest.fixture
 def session() -> Iterator[Session]:
-    # StaticPool + check_same_thread=False: todas las conexiones comparten la
-    # misma BD en memoria (si no, cada conexión vería una BD vacía distinta).
+    # StaticPool keeps a single connection so every session sees the same in-memory DB.
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -39,8 +29,7 @@ def session() -> Iterator[Session]:
 @pytest.fixture
 def client(session: Session) -> Iterator[TestClient]:
     app.dependency_overrides[get_session] = lambda: session
-    # Sin `with TestClient(app)`, el lifespan no se ejecuta, así que no se
-    # intenta conectar a PostgreSQL durante los tests.
+    # Not used as a context manager, so the lifespan (which connects to PostgreSQL) never runs.
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -48,7 +37,7 @@ def client(session: Session) -> Iterator[TestClient]:
 @pytest.fixture
 def ticket_payload() -> dict[str, str]:
     return {
-        "subject": "No puedo iniciar sesión",
-        "body": "Me sale 'contraseña incorrecta' aunque la acabo de cambiar.",
+        "subject": "I can't log in",
+        "body": "I get 'wrong password' even though I just reset it.",
         "customer_email": "ana@example.com",
     }

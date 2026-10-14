@@ -20,12 +20,12 @@ def test_create_ticket(client: TestClient, ticket_payload: dict[str, str]) -> No
 
 
 def test_create_ticket_invalid_email(client: TestClient, ticket_payload: dict[str, str]) -> None:
-    response = client.post("/tickets", json={**ticket_payload, "customer_email": "no-es-email"})
+    response = client.post("/tickets", json={**ticket_payload, "customer_email": "not-an-email"})
     assert response.status_code == 422
 
 
 def test_create_ticket_missing_field(client: TestClient) -> None:
-    response = client.post("/tickets", json={"subject": "Sin cuerpo"})
+    response = client.post("/tickets", json={"subject": "No body"})
     assert response.status_code == 422
 
 
@@ -41,12 +41,12 @@ def test_get_ticket(client: TestClient, ticket_payload: dict[str, str]) -> None:
 def test_get_ticket_not_found(client: TestClient) -> None:
     response = client.get("/tickets/999")
     assert response.status_code == 404
-    assert response.json()["detail"] == "Ticket no encontrado"
+    assert response.json()["detail"] == "Ticket not found"
 
 
 def test_list_tickets_with_filters(client: TestClient, ticket_payload: dict[str, str]) -> None:
     first = client.post("/tickets", json=ticket_payload).json()
-    client.post("/tickets", json={**ticket_payload, "subject": "Otro problema"})
+    client.post("/tickets", json={**ticket_payload, "subject": "Another problem"})
     client.patch(f"/tickets/{first['id']}", json={"priority": "urgent"})
 
     all_tickets = client.get("/tickets").json()
@@ -65,7 +65,7 @@ def test_list_tickets_pagination(client: TestClient, ticket_payload: dict[str, s
 
     assert len(page) == 2
     assert len(rest) == 1
-    # Orden: más recientes primero
+    # Newest first
     assert page[0]["subject"] == "Ticket 2"
 
 
@@ -78,15 +78,15 @@ def test_update_ticket(client: TestClient, ticket_payload: dict[str, str]) -> No
 
     response = client.patch(
         f"/tickets/{created['id']}",
-        json={"status": "in_progress", "category": "account", "summary": "Fallo de login"},
+        json={"status": "in_progress", "category": "account", "summary": "Login failure"},
     )
 
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "in_progress"
     assert data["category"] == "account"
-    assert data["summary"] == "Fallo de login"
-    # Los campos no enviados no cambian
+    assert data["summary"] == "Login failure"
+    # Fields not sent are left unchanged
     assert data["subject"] == ticket_payload["subject"]
     assert data["updated_at"] >= created["updated_at"]
 

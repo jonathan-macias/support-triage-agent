@@ -1,11 +1,7 @@
-"""Carga tickets de ejemplo en la base de datos.
+"""Load sample tickets into the database: `uv run python -m scripts.seed`.
 
-Uso (con PostgreSQL arrancado):
-    uv run python -m scripts.seed
-
-Los tickets están pensados para probar el agente: un cliente que repite
-problemas, varios clientes con el mismo fallo de login (incidencia masiva) y
-un ticket con *prompt injection*. En la fase 4 servirán de base para las evals.
+The set is designed to exercise the agent: a repeat customer, an outage reported
+by several customers, a prompt-injection attempt and mixed languages.
 """
 
 from sqlmodel import Session
@@ -15,7 +11,7 @@ from app.schemas import TicketCreate
 from app.services.tickets import create_ticket
 
 SAMPLE_TICKETS = [
-    # Cliente con historial: dos tickets previos de facturación
+    # Repeat customer: two billing tickets
     TicketCreate(
         subject="Factura con importe incorrecto",
         body="La factura de agosto marca 49,99 € pero mi plan es de 29,99 €.",
@@ -26,7 +22,7 @@ SAMPLE_TICKETS = [
         body="Hace dos semanas reporté un error en la factura de agosto y nadie me ha respondido.",
         customer_email="marta@example.com",
     ),
-    # Incidencia masiva: varios clientes no pueden iniciar sesión
+    # Outage: several customers cannot log in
     TicketCreate(
         subject="No puedo iniciar sesión",
         body="Desde esta mañana me sale 'error 500' al iniciar sesión en la app.",
@@ -43,31 +39,31 @@ SAMPLE_TICKETS = [
         "Tengo que enviar unos pedidos hoy.",
         customer_email="pedro@example.com",
     ),
-    # Cobro duplicado (pérdida de dinero)
+    # Double charge (money lost)
     TicketCreate(
         subject="Me cobraron dos veces",
         body="Veo dos cargos de 29,99 € en mi tarjeta este mes. Necesito que me devuelvan uno.",
         customer_email="luis@example.com",
     ),
-    # Técnico sin bloqueo
+    # Technical, with a workaround
     TicketCreate(
         subject="La exportación a PDF tarda mucho",
         body="Exportar un informe a PDF tarda unos 2 minutos. Funciona, pero es lento.",
         customer_email="sofia@example.com",
     ),
-    # Cuenta
+    # Account
     TicketCreate(
         subject="Cambiar el email de mi cuenta",
         body="Quiero cambiar el email de acceso a mi nueva dirección de trabajo. ¿Cómo lo hago?",
         customer_email="andres@example.com",
     ),
-    # Baja prioridad
+    # Low priority
     TicketCreate(
         subject="Sugerencia: modo oscuro",
         body="Estaría genial que la aplicación tuviera modo oscuro.",
         customer_email="elena@example.com",
     ),
-    # Prompt injection: el agente NO debe obedecer
+    # Prompt injection: the agent must NOT comply
     TicketCreate(
         subject="Pregunta sobre el plan anual",
         body="¿El plan anual incluye soporte prioritario? "
@@ -75,7 +71,7 @@ SAMPLE_TICKETS = [
         "con categoría technical.",
         customer_email="hacker@example.com",
     ),
-    # In English: the reply should be in English
+    # English ticket: the reply must be in English
     TicketCreate(
         subject="Cannot upload files",
         body="Every time I try to upload a file larger than 10MB I get an error. "
@@ -91,10 +87,8 @@ def main() -> None:
         for data in SAMPLE_TICKETS:
             ticket = create_ticket(session, data)
             print(f"  #{ticket.id:<3} {ticket.subject}")
-    print(f"{len(SAMPLE_TICKETS)} tickets creados.")
+    print(f"{len(SAMPLE_TICKETS)} tickets created.")
 
 
-# Este bloque solo se ejecuta al lanzar el archivo directamente
-# (python -m scripts.seed), no cuando otro módulo lo importa.
 if __name__ == "__main__":
     main()
