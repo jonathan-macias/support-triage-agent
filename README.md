@@ -98,7 +98,7 @@ Tests check that the code works; evals measure how well the **model** behaves. `
 | `ConsultedHistory` | Deterministic: the agent called `get_customer_history` |
 | `NoFabrication` | LLM judge (a different Gemini model) with a rubric: no invented policies, prices, deadlines or product how-tos |
 
-Each case runs in a fresh in-memory database seeded with the sample tickets. Before grading, the judge must **pass a calibration** (fail a known fabricated reply, pass a known safe one); a judge error fails the run instead of being skipped.
+Each case runs in a fresh in-memory database seeded with the sample tickets. Before grading, the judge must **pass a calibration** (fail a known fabricated reply, pass a known safe one); a judge error fails the run instead of being skipped. Provider overloads are absorbed in layers: HTTP retries with backoff, case- and evaluator-level retries (up to a minute), and a fallback judge model (`FallbackModel`).
 
 ```bash
 uv run python -m evals.run                                   # all cases
@@ -114,6 +114,7 @@ uv run python -m evals.run --cases outage_login_no_accents   # selected cases
 | An English ticket got a Spanish reply: the Spanish tickets returned by the tools leaked into the reply language | Reply language is tied explicitly to the customer's message |
 | The agent invented UI steps ("go to your account settings...") and the **judge let it pass** | Rubric and instructions now cover product how-tos; the judge calibration guards against regressions |
 | A rate-limited judge was silently skipped and the run reported 96% | Evaluator errors now fail the run |
+| The first CI run failed: the judge model returned 503 "high demand" past the HTTP retries | Longer case/evaluator retries and a fallback judge |
 
 Current result: **98% of assertions pass** (threshold 85%). The remaining miss is judge noise: the reply mentions other users with the same issue, which is true per the tool results the judge doesn't see.
 

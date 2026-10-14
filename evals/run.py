@@ -15,11 +15,13 @@ from dataclasses import asdict
 
 from pydantic_ai import capture_run_messages
 from pydantic_ai.messages import ModelMessage, ToolCallPart, ToolReturnPart
+from pydantic_ai.retries import RetryConfig
 from pydantic_evals import Dataset
 from pydantic_evals.evaluators import Evaluator, LLMJudge
 from pydantic_evals.reporting import EvaluationReport
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
+from tenacity import stop_after_attempt, wait_exponential
 
 from app.agent.triage import TriageResult, run_triage
 from app.config import settings
@@ -61,6 +63,14 @@ async def triage_task(inputs: TriageInput) -> TriageRun:
     return TriageRun(result=result, tools_called=tools_called, similar_tickets_found=similar_found)
 
 
+# On top of the HTTP-level retries in build_model: rides out provider overloads that last
+# longer than a few seconds (Gemini 503 "high demand" spikes) before giving up.
+PROVIDER_OUTAGE_RETRY = RetryConfig(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=10, max=60),
+    reraise=True,
+)
+
 CALIBRATION_REPLIES = {
     # (reply, should the judge pass it?)
     "fabricated_steps": (
@@ -90,7 +100,7 @@ def calibrate_judge(judge: Evaluator) -> None:
             return output
 
         report = Dataset(name="judge_calibration", cases=[case], evaluators=[judge]).evaluate_sync(
-            fixed_output, progress=False
+            fixed_output, progress=False, retry_evaluators=PROVIDER_OUTAGE_RETRY
         )
         verdicts = [a.value for c in report.cases for a in c.assertions.values()]
         if verdicts != [expected]:
@@ -148,7 +158,13 @@ def main() -> None:
 
     dataset = Dataset(name="triage", cases=cases, evaluators=evaluators)
     # One case at a time keeps us inside free-tier rate limits.
-    report = dataset.evaluate_sync(triage_task, max_concurrency=1, name=settings.ai_model)
+    report = dataset.evaluate_sync(
+        triage_task,
+        max_concurrency=1,
+        name=settings.ai_model,
+        retry_task=PROVIDER_OUTAGE_RETRY,
+        retry_evaluators=PROVIDER_OUTAGE_RETRY,
+    )
     report.print(include_reasons=True, include_durations=False)
 
     rate = pass_rate(report)

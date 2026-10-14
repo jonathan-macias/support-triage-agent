@@ -1961,6 +1961,7 @@ dev = [
     { name = "httpx2" },
     { name = "pydantic-evals" },
     { name = "pytest" },
+    { name = "tenacity" },
 ]
 
 [package.metadata]
@@ -1978,6 +1979,7 @@ dev = [
     { name = "httpx2", specifier = ">=2.13.1" },
     { name = "pydantic-evals", specifier = ">=2.56.0" },
     { name = "pytest", specifier = ">=9.1.1" },
+    { name = "tenacity", specifier = ">=9.1.4" },
 ]
 
 [[package]]

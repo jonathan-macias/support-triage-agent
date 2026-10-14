@@ -3,6 +3,7 @@
 import re
 from dataclasses import dataclass, field
 
+from pydantic_ai.models.fallback import FallbackModel
 from pydantic_evals.evaluators import EvaluationReason, Evaluator, EvaluatorContext, LLMJudge
 
 from app.agent.triage import TriageResult, build_model
@@ -119,7 +120,11 @@ def build_evaluators() -> list[Evaluator[TriageInput, TriageRun, None]]:
         LLMJudge(
             rubric=NO_FABRICATION_RUBRIC,
             include_input=True,
-            model=build_model(settings.eval_judge_model),
+            # Prefer a judge that differs from the agent; if it is down, a fallback judge
+            # beats losing the check entirely.
+            model=FallbackModel(
+                build_model(settings.eval_judge_model), build_model(settings.ai_model)
+            ),
             assertion={"evaluation_name": "NoFabrication", "include_reason": True},
         ),
     ]
