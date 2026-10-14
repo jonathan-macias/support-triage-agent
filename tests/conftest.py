@@ -5,6 +5,7 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 from pydantic_ai import models
+from sqlalchemy import Engine
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
@@ -16,12 +17,17 @@ models.ALLOW_MODEL_REQUESTS = False
 
 
 @pytest.fixture
-def session() -> Iterator[Session]:
+def engine() -> Engine:
     # StaticPool keeps a single connection so every session sees the same in-memory DB.
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
     SQLModel.metadata.create_all(engine)
+    return engine
+
+
+@pytest.fixture
+def session(engine: Engine) -> Iterator[Session]:
     with Session(engine) as session:
         yield session
 

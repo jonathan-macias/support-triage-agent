@@ -2,7 +2,7 @@
 
 AI agent that triages customer support tickets with tool calling and an MCP server over a Python (FastAPI) backend, Pydantic AI, evals in CI.
 
-> **Status:** phases 1-2 done (REST API + triage agent). MCP server, evals in CI and a live demo are next. See the [roadmap](#roadmap).
+> **Status:** phases 1-3 done (REST API, triage agent, MCP server). Evals in CI and a live demo are next. See the [roadmap](#roadmap).
 
 ## What it does
 
@@ -33,10 +33,12 @@ flowchart LR
     A -- tool calls --> S
     A -- API --> G[(Gemini / any LLM)]
     S --> DB[(PostgreSQL)]
-    M[MCP server - planned] -.-> S
+    H[Claude Desktop / Claude Code] -- MCP stdio --> M[MCP server]
+    M --> S
+    M --> T
 ```
 
-The service layer has no HTTP concerns, so the REST API, the agent's tools and (next) the MCP server all share the same business logic.
+The service layer has no HTTP concerns, so the REST API, the agent's tools and the MCP server all share the same business logic.
 
 ## Engineering notes
 
@@ -46,11 +48,44 @@ The service layer has no HTTP concerns, so the REST API, the agent's tools and (
 - **Concurrency bug found in a real run:** Gemini requested both tools in one response, and Pydantic AI ran them in parallel threads that shared one SQLAlchemy session, which aborted the PostgreSQL transaction. The fix is `sequential=True` on the tools. A regression test reproduces the parallel tool calls and fails without the fix.
 - **Behavior fixes from manual review:** the first real run invented product details ("yes, the annual plan includes priority support") and replied in Spanish to an English ticket. Both were fixed in the instructions, and they motivate the planned eval suite.
 - **Cost and failure control:** a per-ticket request limit (`UsageLimits`), and provider errors (rate limits, outages, invalid output) map to `503` instead of `500`.
-- **Testing without an LLM:** `TestModel` and scripted `FunctionModel`s replace the real model, and `ALLOW_MODEL_REQUESTS = False` blocks any accidental billable call. The DB is in-memory SQLite through FastAPI dependency overrides.
+- **Testing without an LLM:** `TestModel` and scripted `FunctionModel`s replace the real model, and `ALLOW_MODEL_REQUESTS = False` blocks any accidental billable call. The DB is in-memory SQLite through FastAPI dependency overrides. MCP tools are tested through a real MCP client connected in-process.
+- **Location-independent config:** `.env` is resolved relative to the project, because MCP hosts launch the server from their own working directory.
+
+## MCP server
+
+The same ticket operations are exposed to any MCP host (Claude Desktop, Claude Code, IDEs) through `app/mcp_server.py`, built with the official MCP Python SDK. The host's own model becomes the agent, and this server provides the tools:
+
+| Tool | Description | Annotations |
+|---|---|---|
+| `list_tickets` | List tickets with filters | read-only |
+| `get_ticket` | Ticket details and triage result | read-only |
+| `search_tickets` | Keyword search | read-only |
+| `get_customer_history` | All tickets from a customer | read-only |
+| `triage_ticket` | Runs the Gemini triage agent (agent-as-a-tool) | writes, calls an external LLM |
+| `update_ticket_status` | Set `open` / `in_progress` / `resolved` | writes, idempotent |
+
+There is deliberately no delete tool (least privilege). Tool annotations tell hosts which calls are read-only, so they can ask for confirmation on the rest.
+
+**Claude Code:** the repo ships a project-scoped [`.mcp.json`](.mcp.json); approve the `support-triage` server the first time you open the project.
+
+**Claude Desktop:** fully quit the app (it rewrites its config while running), run `python scripts/register_claude_desktop.py`, then start it again. Or add this to `claude_desktop_config.json` by hand:
+
+```json
+{
+  "mcpServers": {
+    "support-triage": {
+      "command": "uv",
+      "args": ["--directory", "/absolute/path/to/support-triage-agent", "run", "python", "-m", "app.mcp_server"]
+    }
+  }
+}
+```
+
+Use the absolute path to `uv` if the host can't find it on its `PATH`. PostgreSQL must be running (`docker compose up -d`). To try the tools by hand: `npx @modelcontextprotocol/inspector uv run python -m app.mcp_server`.
 
 ## Tech stack
 
-Python 3.12 · FastAPI · Pydantic / pydantic-settings · SQLModel (SQLAlchemy) · PostgreSQL 17 · Pydantic AI · Google Gemini · pytest · uv · Docker Compose
+Python 3.12 · FastAPI · Pydantic / pydantic-settings · SQLModel (SQLAlchemy) · PostgreSQL 17 · Pydantic AI · Google Gemini · MCP Python SDK · pytest · uv · Docker Compose
 
 ## Quickstart
 
@@ -92,17 +127,20 @@ app/
 ├── models.py            # SQLModel table
 ├── schemas.py           # request/response models
 ├── agent/triage.py      # Pydantic AI agent: instructions, tools, structured output
+├── mcp_server.py        # MCP server (stdio) exposing the ticket tools
 ├── services/            # business logic shared by the API, agent and MCP server
 └── routers/tickets.py   # HTTP endpoints
 scripts/seed.py          # sample tickets (multilingual, includes a prompt-injection case)
-tests/                   # API, agent and regression tests
+scripts/register_claude_desktop.py  # adds the MCP server to Claude Desktop's config
+tests/                   # API, agent, MCP and regression tests
+.mcp.json                # Claude Code project config for the MCP server
 ```
 
 ## Roadmap
 
 - [x] Phase 1: tickets REST API (FastAPI + PostgreSQL)
 - [x] Phase 2: triage agent with tool calling (Pydantic AI + Gemini)
-- [ ] Phase 3: MCP server exposing the ticket tools
+- [x] Phase 3: MCP server exposing the ticket tools
 - [ ] Phase 4: eval suite + GitHub Actions (tests and evals on every push)
 - [ ] Phase 5: deployed demo
 

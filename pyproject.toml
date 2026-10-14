@@ -8,6 +8,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]>=0.142.4",
+    "mcp>=2.3.0",
     "pg8000>=1.31.5",
     "pydantic-ai-slim[google]>=2.56.0",
     "pydantic-settings>=2.15.0",
