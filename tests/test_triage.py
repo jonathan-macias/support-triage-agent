@@ -197,6 +197,24 @@ def test_search_tickets(session: Session) -> None:
     assert ticket_service.search_tickets(session, "log", exclude_id=login.id) == []
 
 
+def test_search_ignores_accents_and_case(session: Session) -> None:
+    login = ticket_service.create_ticket(
+        session,
+        TicketCreate(subject="No puedo iniciar SESIÓN", body="Error 500", customer_email="a@x.com"),
+    )
+
+    assert [t.id for t in ticket_service.search_tickets(session, "iniciar sesion")] == [login.id]
+    assert [t.id for t in ticket_service.search_tickets(session, "Sesión")] == [login.id]
+
+
+def test_search_treats_wildcards_literally(session: Session) -> None:
+    ticket_service.create_ticket(
+        session, TicketCreate(subject="Invoice", body="Charged twice", customer_email="a@x.com")
+    )
+
+    assert ticket_service.search_tickets(session, "%") == []
+
+
 def test_list_tickets_filter_by_customer(
     client: TestClient, ticket_payload: dict[str, str]
 ) -> None:

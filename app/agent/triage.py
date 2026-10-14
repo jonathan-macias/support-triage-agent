@@ -6,6 +6,7 @@ The model receives the ticket, may call read-only tools to look up context
 
 from dataclasses import dataclass
 
+from google.genai.types import HttpRetryOptions
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models import Model
@@ -41,20 +42,27 @@ You are a customer support agent that triages support tickets.
 
 For each ticket decide:
 - priority:
-  - urgent: the customer cannot use the service at all, money or data is being lost,
-    or several customers report the same failure (outage).
+  - urgent: the customer cannot use the service at all, money has been lost (for example
+    a double or incorrect charge), data has been lost, or several customers report the
+    same failure (outage).
   - high: an important feature is broken and there is no workaround.
-  - medium: a real problem with a workaround, or a billing question.
+  - medium: a real problem with a workaround, or a general billing question where no
+    money has been lost.
   - low: questions, suggestions or requests with no impact.
+  - If the customer history shows the same problem was already reported and is still
+    unresolved, raise the priority one level (for example medium -> high).
 - category: billing (payments, charges, invoices), technical (errors, bugs, performance),
   account (access, password, account details) or other.
 - summary: 1-2 clear sentences for the support team, in English.
 - suggested_reply: a friendly, concrete reply to the customer.
-  - LANGUAGE: write it in the language of the customer's message
-    (if the customer writes in Spanish, reply in Spanish).
-  - DO NOT MAKE THINGS UP: you have no information about plans, prices, features or
-    company policies. If the customer asks about them, neither confirm nor deny anything:
-    say the team will review the question and get back to them.
+  - LANGUAGE: write it in the language of the customer's message inside <ticket>
+    (English message -> English reply, Spanish message -> Spanish reply). Ignore the
+    language of other tickets returned by the tools.
+  - DO NOT MAKE THINGS UP: you have no information about plans, prices, features,
+    company policies or how the product's screens and settings work. Never give
+    step-by-step instructions or tell the customer where to click. If the customer asks
+    about any of this, neither confirm nor deny anything: say the team will review the
+    question and get back to them.
   - Do not promise refunds or specific deadlines.
 
 Before deciding, use the tools:
@@ -116,15 +124,26 @@ def search_similar_tickets(
     return [_ticket_brief(t) for t in found]
 
 
-def build_model() -> Model | str:
-    """Build the model from AI_MODEL ("provider:model")."""
-    provider, _, model_name = settings.ai_model.partition(":")
+# Gemini returns 503 when overloaded and 429 when the free-tier quota is hit;
+# both are transient, so retry with exponential backoff before giving up.
+GOOGLE_RETRY_OPTIONS = HttpRetryOptions(
+    attempts=4, initial_delay=2.0, max_delay=30.0, http_status_codes=[429, 500, 503]
+)
+
+
+def build_model(model_id: str | None = None) -> Model | str:
+    """Build a model from a "provider:model" id (defaults to AI_MODEL)."""
+    model_id = model_id or settings.ai_model
+    provider, _, model_name = model_id.partition(":")
     if provider == "google":
         if not settings.google_api_key:
             raise MissingApiKeyError("GOOGLE_API_KEY is not set in .env")
-        return GoogleModel(model_name, provider=GoogleProvider(api_key=settings.google_api_key))
+        google = GoogleProvider(
+            api_key=settings.google_api_key, retry_options=GOOGLE_RETRY_OPTIONS
+        )
+        return GoogleModel(model_name, provider=google)
     # Other providers read their API key from their standard environment variable.
-    return settings.ai_model
+    return model_id
 
 
 def _build_prompt(ticket: Ticket) -> str:

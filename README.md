@@ -1,8 +1,11 @@
 # Support Triage Agent
 
+[![CI](https://github.com/jonathan-macias/support-triage-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/jonathan-macias/support-triage-agent/actions/workflows/ci.yml)
+[![Evals](https://github.com/jonathan-macias/support-triage-agent/actions/workflows/evals.yml/badge.svg)](https://github.com/jonathan-macias/support-triage-agent/actions/workflows/evals.yml)
+
 AI agent that triages customer support tickets with tool calling and an MCP server over a Python (FastAPI) backend, Pydantic AI, evals in CI.
 
-> **Status:** phases 1-3 done (REST API, triage agent, MCP server). Evals in CI and a live demo are next. See the [roadmap](#roadmap).
+> **Status:** phases 1-4 done (REST API, triage agent, MCP server, evals in CI). A live demo is next. See the [roadmap](#roadmap).
 
 ## What it does
 
@@ -47,7 +50,7 @@ The service layer has no HTTP concerns, so the REST API, the agent's tools and t
 - **Prompt-injection defense in depth:** customer text is delimited and explicitly treated as data; the tools are read-only (the model can't write anything); only application code persists the validated result.
 - **Concurrency bug found in a real run:** Gemini requested both tools in one response, and Pydantic AI ran them in parallel threads that shared one SQLAlchemy session, which aborted the PostgreSQL transaction. The fix is `sequential=True` on the tools. A regression test reproduces the parallel tool calls and fails without the fix.
 - **Behavior fixes from manual review:** the first real run invented product details ("yes, the annual plan includes priority support") and replied in Spanish to an English ticket. Both were fixed in the instructions, and they motivate the planned eval suite.
-- **Cost and failure control:** a per-ticket request limit (`UsageLimits`), and provider errors (rate limits, outages, invalid output) map to `503` instead of `500`.
+- **Cost and failure control:** a per-ticket request limit (`UsageLimits`), automatic retries with exponential backoff on Gemini 429/503 responses, and provider errors that still fail map to `503` instead of `500`.
 - **Testing without an LLM:** `TestModel` and scripted `FunctionModel`s replace the real model, and `ALLOW_MODEL_REQUESTS = False` blocks any accidental billable call. The DB is in-memory SQLite through FastAPI dependency overrides. MCP tools are tested through a real MCP client connected in-process.
 - **Location-independent config:** `.env` is resolved relative to the project, because MCP hosts launch the server from their own working directory.
 
@@ -83,9 +86,46 @@ There is deliberately no delete tool (least privilege). Tool annotations tell ho
 
 Use the absolute path to `uv` if the host can't find it on its `PATH`. PostgreSQL must be running (`docker compose up -d`). To try the tools by hand: `npx @modelcontextprotocol/inspector uv run python -m app.mcp_server`.
 
+## Evals
+
+Tests check that the code works; evals measure how well the **model** behaves. `evals/` runs the real agent on 11 cases (repeat customer, outage, double charge, prompt injection in Spanish and English, a refund-policy question that baits hallucination...) with [pydantic-evals](https://pydantic.dev/docs/ai/evals/):
+
+| Check | How |
+|---|---|
+| `PriorityMatches`, `CategoryMatches` | Deterministic: the result must be one of the accepted values (ambiguous cases accept more than one) |
+| `ReplyLanguageMatches` | Deterministic: stopword-based es/en detection of the reply |
+| `OutageDetected` | Deterministic: in outage cases, the search tool must surface the other reports |
+| `ConsultedHistory` | Deterministic: the agent called `get_customer_history` |
+| `NoFabrication` | LLM judge (a different Gemini model) with a rubric: no invented policies, prices, deadlines or product how-tos |
+
+Each case runs in a fresh in-memory database seeded with the sample tickets. Before grading, the judge must **pass a calibration** (fail a known fabricated reply, pass a known safe one); a judge error fails the run instead of being skipped.
+
+```bash
+uv run python -m evals.run                                   # all cases
+uv run python -m evals.run --cases outage_login_no_accents   # selected cases
+```
+
+**What the evals caught** (each fixed and re-verified):
+
+| Finding | Fix |
+|---|---|
+| A customer writing without accents ("iniciar sesion") wasn't matched with other "sesión" reports, so the outage was missed and the ticket got `high` instead of `urgent` | Search on a normalized (casefolded, accent-free) column; works on PostgreSQL and SQLite |
+| Double charges and repeat complaints were rated `medium`: the instructions said both "billing → medium" and "money lost → urgent" | Disambiguated priority rules, plus "raise one level if the problem was already reported" |
+| An English ticket got a Spanish reply: the Spanish tickets returned by the tools leaked into the reply language | Reply language is tied explicitly to the customer's message |
+| The agent invented UI steps ("go to your account settings...") and the **judge let it pass** | Rubric and instructions now cover product how-tos; the judge calibration guards against regressions |
+| A rate-limited judge was silently skipped and the run reported 96% | Evaluator errors now fail the run |
+
+Current result: **98% of assertions pass** (threshold 85%). The remaining miss is judge noise: the reply mentions other users with the same issue, which is true per the tool results the judge doesn't see.
+
+## CI
+
+- **[CI](.github/workflows/ci.yml)** runs the test suite on every push and pull request (no database, API key or network).
+- **[Evals](.github/workflows/evals.yml)** run on demand and when the agent, services, models or eval files change, with the results table written to the job summary. They need a `GOOGLE_API_KEY` repository secret. Runs are serialized to stay within API quotas.
+- Actions are pinned to commit SHAs.
+
 ## Tech stack
 
-Python 3.12 · FastAPI · Pydantic / pydantic-settings · SQLModel (SQLAlchemy) · PostgreSQL 17 · Pydantic AI · Google Gemini · MCP Python SDK · pytest · uv · Docker Compose
+Python 3.12 · FastAPI · Pydantic / pydantic-settings · SQLModel (SQLAlchemy) · PostgreSQL 17 · Pydantic AI · Google Gemini · MCP Python SDK · pydantic-evals · pytest · GitHub Actions · uv · Docker Compose
 
 ## Quickstart
 
@@ -130,10 +170,12 @@ app/
 ├── mcp_server.py        # MCP server (stdio) exposing the ticket tools
 ├── services/            # business logic shared by the API, agent and MCP server
 └── routers/tickets.py   # HTTP endpoints
+evals/                   # eval dataset, evaluators and runner (pydantic-evals)
 scripts/seed.py          # sample tickets (multilingual, includes a prompt-injection case)
 scripts/register_claude_desktop.py  # adds the MCP server to Claude Desktop's config
 tests/                   # API, agent, MCP and regression tests
 .mcp.json                # Claude Code project config for the MCP server
+.github/workflows/       # CI (tests) and evals
 ```
 
 ## Roadmap
@@ -141,7 +183,7 @@ tests/                   # API, agent, MCP and regression tests
 - [x] Phase 1: tickets REST API (FastAPI + PostgreSQL)
 - [x] Phase 2: triage agent with tool calling (Pydantic AI + Gemini)
 - [x] Phase 3: MCP server exposing the ticket tools
-- [ ] Phase 4: eval suite + GitHub Actions (tests and evals on every push)
+- [x] Phase 4: eval suite + GitHub Actions
 - [ ] Phase 5: deployed demo
 
 ## How I built this

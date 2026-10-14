@@ -6,7 +6,8 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from app.config import settings
 
-engine = create_engine(settings.database_url)
+# pool_pre_ping: drop pooled connections that died (e.g. after a database restart).
+engine = create_engine(settings.database_url, pool_pre_ping=True)
 
 
 def create_db_and_tables() -> None:

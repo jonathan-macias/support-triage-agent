@@ -1,14 +1,22 @@
 """Ticket business logic, free of HTTP concerns so the API, the agent tools and
 the MCP server can all share it."""
 
-from sqlmodel import Session, or_, select
+import unicodedata
+
+from sqlmodel import Session, select
 
 from app.models import Ticket, TicketCategory, TicketPriority, TicketStatus, utc_now
 from app.schemas import TicketCreate, TicketUpdate
 
 
+def normalize_text(text: str) -> str:
+    """Casefold and strip accents: "Iniciar Sesión" -> "iniciar sesion"."""
+    decomposed = unicodedata.normalize("NFKD", text.casefold())
+    return "".join(char for char in decomposed if not unicodedata.combining(char))
+
+
 def create_ticket(session: Session, data: TicketCreate) -> Ticket:
-    ticket = Ticket(**data.model_dump())
+    ticket = Ticket(**data.model_dump(), search_text=normalize_text(f"{data.subject} {data.body}"))
     session.add(ticket)
     session.commit()
     session.refresh(ticket)
@@ -46,11 +54,9 @@ def list_tickets(
 def search_tickets(
     session: Session, text: str, *, exclude_id: int | None = None, limit: int = 5
 ) -> list[Ticket]:
-    """Case-insensitive substring search over subject and body."""
-    pattern = f"%{text}%"
-    query = select(Ticket).where(
-        or_(Ticket.subject.ilike(pattern), Ticket.body.ilike(pattern))
-    )
+    """Case- and accent-insensitive substring search over subject and body."""
+    # autoescape: a "%" or "_" typed by the caller is matched literally, not as a wildcard.
+    query = select(Ticket).where(Ticket.search_text.contains(normalize_text(text), autoescape=True))
     if exclude_id is not None:
         query = query.where(Ticket.id != exclude_id)
 

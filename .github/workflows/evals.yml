@@ -1,0 +1,64 @@
+name: Evals
+
+# Evals call a real LLM (cost and rate limits), so they run only when the agent's
+# behavior can change, or on demand.
+on:
+  workflow_dispatch:
+    inputs:
+      cases:
+        description: "Comma-separated case names (empty = all cases)"
+        required: false
+        default: ""
+  push:
+    branches: [main]
+    paths:
+      - "app/agent/**"
+      - "app/services/**"
+      - "app/models.py"
+      - "evals/**"
+      - "scripts/seed.py"
+  pull_request:
+    paths:
+      - "app/agent/**"
+      - "app/services/**"
+      - "app/models.py"
+      - "evals/**"
+      - "scripts/seed.py"
+
+permissions:
+  contents: read
+
+# Never run two eval jobs at once: they would share the same API quota.
+concurrency:
+  group: evals
+  cancel-in-progress: false
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      PYDANTIC_AI_NO_BANNER: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.12.23"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Check API key
+        if: env.GOOGLE_API_KEY == ''
+        run: |
+          echo "::error::Add a GOOGLE_API_KEY repository secret to run the evals."
+          exit 1
+
+      - name: Run evals
+        env:
+          CASES: ${{ inputs.cases }}
+        # Input passed through an env var, not interpolated into the script (avoids injection).
+        run: uv run python -m evals.run ${CASES:+--cases "$CASES"}

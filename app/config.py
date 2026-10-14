@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     ai_model: str = "google:gemini-3.5-flash-lite"
     # Optional so the app and the test suite can run without an API key.
     google_api_key: str | None = None
+    # Judge for LLM-graded evals: a different model than the agent avoids self-grading bias.
+    eval_judge_model: str = "google:gemini-3.1-flash-lite"
 
 
 settings = Settings()

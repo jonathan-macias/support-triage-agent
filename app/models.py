@@ -35,6 +35,8 @@ class Ticket(SQLModel, table=True):
     subject: str = Field(max_length=200)
     body: str
     customer_email: str = Field(max_length=320)
+    # Lowercased, accent-free subject + body so search matches "sesion" and "Sesión" alike.
+    search_text: str = ""
 
     status: TicketStatus = Field(default=TicketStatus.OPEN, index=True)
 
