@@ -1,0 +1,22 @@
+# Levanta una base de datos PostgreSQL local para desarrollo.
+# Uso:  docker compose up -d     (arrancar en segundo plano)
+#       docker compose down      (parar; los datos se conservan en el volumen)
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: tickets
+      POSTGRES_PASSWORD: tickets
+      POSTGRES_DB: tickets
+    ports:
+      - "5433:5432"  # 5433 en tu PC (el 5432 lo usa tu PostgreSQL de Windows)
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tickets"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
