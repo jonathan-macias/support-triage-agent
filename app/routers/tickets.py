@@ -9,11 +9,14 @@ from http import HTTPStatus
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic_ai.exceptions import AgentRunError
 
 from app.database import SessionDep
 from app.models import Ticket, TicketCategory, TicketPriority, TicketStatus
 from app.schemas import TicketCreate, TicketRead, TicketUpdate
+from app.agent.triage import MissingApiKeyError
 from app.services import tickets as service
+from app.services.triage import triage_ticket
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 
@@ -46,11 +49,18 @@ def list_tickets(
     status: TicketStatus | None = None,
     priority: TicketPriority | None = None,
     category: TicketCategory | None = None,
+    customer_email: str | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[Ticket]:
     return service.list_tickets(
-        session, status=status, priority=priority, category=category, limit=limit, offset=offset
+        session,
+        status=status,
+        priority=priority,
+        category=category,
+        customer_email=customer_email,
+        limit=limit,
+        offset=offset,
     )
 
 
@@ -67,3 +77,20 @@ def update_ticket(ticket: TicketDep, changes: TicketUpdate, session: SessionDep)
 @router.delete("/{ticket_id}", status_code=HTTPStatus.NO_CONTENT)
 def delete_ticket(ticket: TicketDep, session: SessionDep) -> None:
     service.delete_ticket(session, ticket)
+
+
+# `async def`: el agente espera la respuesta del modelo por red (varios segundos).
+# Con `await`, el servidor puede atender otras peticiones mientras tanto.
+@router.post("/{ticket_id}/triage", response_model=TicketRead)
+async def triage(ticket: TicketDep, session: SessionDep) -> Ticket:
+    """Usa el agente de IA para asignar prioridad, categoría, resumen y respuesta sugerida."""
+    try:
+        return await triage_ticket(session, ticket)
+    except MissingApiKeyError as exc:
+        raise HTTPException(status_code=HTTPStatus.SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except AgentRunError as exc:
+        # Fallo del proveedor de IA (red, cuota, respuesta inválida, límite de uso...)
+        raise HTTPException(
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+            detail=f"El agente de IA no pudo completar el triage: {exc}",
+        ) from exc

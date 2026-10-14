@@ -1,7 +1,7 @@
 """Punto de entrada de la API.
 
 Arrancar en modo desarrollo (se recarga al guardar cambios):
-    uv run fastapi dev app/main.py
+    uv run python -m fastapi dev app/main.py
 Documentación interactiva: http://127.0.0.1:8000/docs
 """
 

@@ -12,11 +12,16 @@ from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic_ai import models
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.database import get_session
 from app.main import app
+
+# Red de seguridad: si algún test intentara llamar a un modelo de IA real
+# (con coste), Pydantic AI lanzaría un error en vez de hacer la petición.
+models.ALLOW_MODEL_REQUESTS = False
 
 
 @pytest.fixture

@@ -6,7 +6,7 @@ siguientes fases: las *tools* del agente de IA y el servidor MCP llamarán a
 estas mismas funciones, sin pasar por la API web.
 """
 
-from sqlmodel import Session, select
+from sqlmodel import Session, or_, select
 
 from app.models import Ticket, TicketCategory, TicketPriority, TicketStatus, utc_now
 from app.schemas import TicketCreate, TicketUpdate
@@ -30,6 +30,7 @@ def list_tickets(
     status: TicketStatus | None = None,
     priority: TicketPriority | None = None,
     category: TicketCategory | None = None,
+    customer_email: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[Ticket]:
@@ -41,8 +42,25 @@ def list_tickets(
         query = query.where(Ticket.priority == priority)
     if category is not None:
         query = query.where(Ticket.category == category)
+    if customer_email is not None:
+        query = query.where(Ticket.customer_email == customer_email)
 
     query = query.order_by(Ticket.id.desc()).offset(offset).limit(limit)
+    return list(session.exec(query).all())
+
+
+def search_tickets(
+    session: Session, text: str, *, exclude_id: int | None = None, limit: int = 5
+) -> list[Ticket]:
+    """Busca tickets cuyo asunto o cuerpo contengan `text` (sin distinguir mayúsculas)."""
+    pattern = f"%{text}%"  # en SQL, % significa "cualquier cosa"
+    query = select(Ticket).where(
+        or_(Ticket.subject.ilike(pattern), Ticket.body.ilike(pattern))
+    )
+    if exclude_id is not None:
+        query = query.where(Ticket.id != exclude_id)
+
+    query = query.order_by(Ticket.id.desc()).limit(limit)
     return list(session.exec(query).all())
 
 
